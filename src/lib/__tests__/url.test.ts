@@ -43,6 +43,30 @@ describe('normalizeUrl', () => {
     expect(normalizeUrl('https://www.w3schools.com/html/default.asp'))
       .not.toBe(normalizeUrl('https://www.w3schools.com/html/tryit.asp'));
   });
+
+  it('returns opaque-scheme URLs unchanged instead of fabricating an authority', () => {
+    expect(normalizeUrl('mailto:foo@example.com')).toBe('mailto:foo@example.com');
+    expect(normalizeUrl('javascript:void(0)')).toBe('javascript:void(0)');
+    expect(normalizeUrl('data:text/html,<h1>hi</h1>')).toBe('data:text/html,<h1>hi</h1>');
+  });
+
+  it('still normalizes file URLs, which have an empty host but ARE hierarchical', () => {
+    expect(normalizeUrl('file:///home/x')).toBe('file:///home/x');
+    // Trailing-slash stripping still applies, proving this path goes through
+    // full normalization rather than the opaque-scheme early return.
+    expect(normalizeUrl('file:///home/x/')).toBe('file:///home/x');
+  });
+
+  it('preserves userinfo so credentialed and credential-free URLs do not collide', () => {
+    const withCreds = normalizeUrl('https://user:pass@example.com/a');
+    const withoutCreds = normalizeUrl('https://example.com/a');
+    expect(withCreds).toContain('user:pass@');
+    expect(withCreds).not.toBe(withoutCreds);
+  });
+
+  it('round-trips a username-only authority (no password)', () => {
+    expect(normalizeUrl('https://user@example.com/a')).toBe('https://user@example.com/a');
+  });
 });
 
 describe('siteOf', () => {
@@ -58,6 +82,11 @@ describe('siteOf', () => {
 
   it('returns empty string for unparseable input', () => {
     expect(siteOf('not a url')).toBe('');
+  });
+
+  it('treats each github.io user as its own site (allowPrivateDomains)', () => {
+    expect(siteOf('https://user.github.io/repo')).toBe('user.github.io');
+    expect(siteOf('https://other.github.io/x')).not.toBe(siteOf('https://user.github.io/repo'));
   });
 });
 

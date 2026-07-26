@@ -23,6 +23,16 @@ export function normalizeUrl(raw: string): string {
     return raw;
   }
 
+  // Schemes with no authority component (mailto:, javascript:, data:, ...) have
+  // an empty host and a non-hierarchical pathname (it doesn't start with '/').
+  // `file:///home/x` also has an empty host but IS hierarchical, so it must not
+  // be treated as opaque. Reconstructing `${protocol}//${host}${path}` for a
+  // truly opaque URL would fabricate an authority that was never there (e.g.
+  // `mailto:foo@example.com` -> `mailto://foo@example.com`), so we bail out
+  // and return the input verbatim: there is nothing meaningful to normalize.
+  const hasAuthority = u.host !== '' || u.pathname.startsWith('/');
+  if (!hasAuthority) return raw;
+
   u.protocol = u.protocol.toLowerCase();
   u.hostname = u.hostname.toLowerCase().replace(/^www\./, '');
   // http -> https for comparison only.
@@ -40,12 +50,29 @@ export function normalizeUrl(raw: string): string {
   const isSpaRoute = u.hash.startsWith('#/') && path === '';
   const hash = isSpaRoute ? u.hash : '';
 
-  return `${u.protocol}//${u.host}${path}${query ? `?${query}` : ''}${hash}`;
+  // Credentials are preserved deliberately: `u.host` excludes userinfo, so
+  // dropping it here would make `https://user:pass@example.com/a` and
+  // `https://example.com/a` normalize (and hash) identically, silently
+  // merging two distinct bookmarks.
+  const authority = u.username
+    ? `${u.username}${u.password ? `:${u.password}` : ''}@${u.host}`
+    : u.host;
+
+  // Note: percent-encoded unreserved characters are NOT canonicalized here,
+  // so `/%7Euser` and `/~user` are treated as distinct paths. This is a known
+  // limitation, not an oversight.
+  return `${u.protocol}//${authority}${path}${query ? `?${query}` : ''}${hash}`;
 }
 
 /** eTLD+1 via the public suffix list. Returns '' when undeterminable. */
 export function siteOf(raw: string): string {
   try {
+    // allowPrivateDomains is deliberate: without it, every subdomain on a
+    // PSL "private" entry collapses to that entry's registrable domain, so
+    // all GitHub Pages users would collapse to the single site `github.io`
+    // instead of each `user.github.io` being its own site for grouping
+    // purposes. This applies to the whole PSL private section (also
+    // *.herokuapp.com, *.blogspot.com, S3 buckets, etc.), not just github.io.
     return getDomain(new URL(raw).hostname, { allowPrivateDomains: true }) ?? '';
   } catch {
     return '';
