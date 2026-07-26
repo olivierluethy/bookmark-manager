@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import Database from 'better-sqlite3';
-import { eq } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { eq, sql as sqlTag } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
+import { createTestDb } from '../testDb';
+import { runMigrations } from '../migrate';
 import { bookmarks, folders } from '../schema';
 
 const DIR = join(process.cwd(), 'src/db/migrations');
@@ -12,36 +12,21 @@ const sql = readdirSync(DIR)
   .map((f) => readFileSync(join(DIR, f), 'utf8'))
   .join('\n');
 
-// The generated migration file(s) separate individual DDL statements with
-// this marker. Split on it and execute the statements in order rather than
-// reordering anything — statement order matters (see below).
-const statements = sql
-  .split('--> statement-breakpoint')
-  .map((s) => s.trim())
-  .filter((s) => s.length > 0);
-
 /**
- * Applies the generated migration to a fresh in-memory better-sqlite3
- * database and returns both the raw driver (for asserting on-disk values)
- * and a Drizzle wrapper (for asserting the ORM's mapped values).
+ * Applies the real migration runner (the same one the app boots with) to a
+ * fresh in-memory better-sqlite3 database via the shared `createTestDb`
+ * seam, and returns the Drizzle wrapper for asserting on the result.
  *
- * `bookmarks` is created before `folders` in the generated SQL, which
- * references a table (`folders`) that doesn't exist yet. SQLite resolves
- * FK targets lazily, so this is not an error by itself — but enforcement
- * must be off while the schema is still being built, or the later
- * `folders` CREATE TABLE (whose FK points at itself) plus any impatient
- * enforcement could reject valid DDL. Foreign keys are enabled only after
- * every statement has run.
+ * SQLite resolves FK targets lazily, so `bookmarks` being created before
+ * `folders` in the generated SQL (which references a table that doesn't
+ * exist yet) is not an error by itself, and foreign key enforcement can
+ * stay on for the whole run — verified by the migration tests in
+ * `migrate.test.ts`.
  */
-function createTestDb() {
-  const sqlite = new Database(':memory:');
-  sqlite.pragma('foreign_keys = OFF');
-  for (const statement of statements) {
-    sqlite.exec(statement);
-  }
-  sqlite.pragma('foreign_keys = ON');
-  const db = drizzle(sqlite, { schema: { folders, bookmarks } });
-  return { sqlite, db };
+async function createDb() {
+  const { db, tx, close } = createTestDb();
+  await runMigrations(tx, new Map());
+  return { db, close };
 }
 
 const now = 1700000000000;
@@ -67,12 +52,12 @@ describe('generated migrations', () => {
 });
 
 describe('migration execution (better-sqlite3)', () => {
-  it('applies to a real SQLite database without error', () => {
-    expect(() => createTestDb()).not.toThrow();
+  it('applies to a real SQLite database without error', async () => {
+    await expect(createDb()).resolves.toBeDefined();
   });
 
-  it('cascades folder deletion through more than one level of nesting', () => {
-    const { db } = createTestDb();
+  it('cascades folder deletion through more than one level of nesting', async () => {
+    const { db } = await createDb();
     db.insert(folders)
       .values([
         { id: 'root', name: 'Root', createdAt: now, updatedAt: now },
@@ -92,8 +77,8 @@ describe('migration execution (better-sqlite3)', () => {
     expect(db.select().from(folders).all()).toHaveLength(0);
   });
 
-  it('sets bookmarks.folder_id to NULL (not deleting the row) when a folder is removed, including nested folders removed by cascade', () => {
-    const { db } = createTestDb();
+  it('sets bookmarks.folder_id to NULL (not deleting the row) when a folder is removed, including nested folders removed by cascade', async () => {
+    const { db } = await createDb();
     db.insert(folders)
       .values([
         { id: 'root', name: 'Root', createdAt: now, updatedAt: now },
@@ -142,8 +127,8 @@ describe('migration execution (better-sqlite3)', () => {
     }
   });
 
-  it('round-trips the is_pinned boolean default through raw SQLite and Drizzle', () => {
-    const { sqlite, db } = createTestDb();
+  it('round-trips the is_pinned boolean default through raw SQLite and Drizzle', async () => {
+    const { db } = await createDb();
     db.insert(bookmarks)
       .values({
         id: 'b1',
@@ -158,17 +143,19 @@ describe('migration execution (better-sqlite3)', () => {
       })
       .run();
 
-    const raw = sqlite.prepare('SELECT is_pinned FROM bookmarks WHERE id = ?').get('b1') as {
-      is_pinned: number;
-    };
+    // A raw SQL query (as opposed to a schema-typed select) bypasses
+    // Drizzle's boolean mapping, so this asserts the on-disk representation.
+    const raw = db.get<{ is_pinned: number }>(
+      sqlTag`SELECT is_pinned FROM bookmarks WHERE id = ${'b1'}`,
+    );
     expect(raw.is_pinned).toBe(0);
 
     const row = db.select().from(bookmarks).where(eq(bookmarks.id, 'b1')).get();
     expect(row?.isPinned).toBe(false);
   });
 
-  it('rejects a second folder claiming the same system_key', () => {
-    const { db } = createTestDb();
+  it('rejects a second folder claiming the same system_key', async () => {
+    const { db } = await createDb();
     db.insert(folders)
       .values({
         id: 'f1',
@@ -193,8 +180,8 @@ describe('migration execution (better-sqlite3)', () => {
     ).toThrow(/UNIQUE constraint failed/);
   });
 
-  it('allows multiple folders with a NULL system_key (the unique index is partial)', () => {
-    const { db } = createTestDb();
+  it('allows multiple folders with a NULL system_key (the unique index is partial)', async () => {
+    const { db } = await createDb();
     expect(() =>
       db
         .insert(folders)
