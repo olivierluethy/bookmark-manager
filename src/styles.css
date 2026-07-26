@@ -13,6 +13,7 @@
   --color-muted: #6B6355;
   --color-line: #E5DED1;
   --color-accent: #B4552E;
+  --color-on-accent: #FFFFFF;
   --radius-app: 6px;
   --font-display: 'Fraunces Variable', ui-serif, Georgia, serif;
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
@@ -25,7 +26,9 @@
     --color-text: #EFE9DC;
     --color-muted: #9A9081;
     --color-line: #332E24;
-    --color-accent: #B4552E;
+    /* Lightened from #B4552E: it measures 3.43:1 on the dark surface and fails AA. */
+    --color-accent: #CC7048;
+    --color-on-accent: #17150F;
   }
 }
 

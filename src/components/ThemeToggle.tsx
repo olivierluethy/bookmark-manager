@@ -38,7 +38,7 @@ export function ThemeToggle() {
           aria-checked={mode === option}
           onClick={() => setMode(option)}
           className={`rounded-[4px] px-2 py-1 text-xs capitalize transition-colors duration-150 ${
-            mode === option ? 'bg-accent text-white' : 'text-muted hover:text-text'
+            mode === option ? 'bg-accent text-on-accent' : 'text-muted hover:text-text'
           }`}
         >
           {option}
