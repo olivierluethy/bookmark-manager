@@ -702,27 +702,45 @@ type DividerProps = {
   side: 'left' | 'right';
 };
 
-export function PaneDivider({ ariaLabel, value, onChange, side }: DividerProps) {
-  const dragging = useRef(false);
+/**
+ * PURE. Delta-based so the arithmetic does not depend on where the divider
+ * sits in the DOM. Deriving the width from a parent's bounding rect only
+ * works while the panes are flush against that parent's edges, and breaks
+ * silently the moment the shell gains padding or an extra wrapper.
+ * Not clamped here — the store clamps.
+ */
+export function computeDragWidth(
+  startWidth: number,
+  startX: number,
+  clientX: number,
+  side: 'left' | 'right',
+): number {
+  const delta = clientX - startX;
+  return side === 'left' ? startWidth + delta : startWidth - delta;
+}
 
-  const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    dragging.current = true;
-    e.currentTarget.setPointerCapture(e.pointerId);
-  }, []);
+export function PaneDivider({ ariaLabel, value, onChange, side }: DividerProps) {
+  const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      drag.current = { startX: e.clientX, startWidth: value };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    [value],
+  );
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragging.current) return;
-      const parent = e.currentTarget.parentElement;
-      if (!parent) return;
-      const rect = parent.getBoundingClientRect();
-      onChange(side === 'left' ? e.clientX - rect.left : rect.right - e.clientX);
+      const start = drag.current;
+      if (!start) return;
+      onChange(computeDragWidth(start.startWidth, start.startX, e.clientX, side));
     },
     [onChange, side],
   );
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    dragging.current = false;
+    drag.current = null;
     e.currentTarget.releasePointerCapture(e.pointerId);
   }, []);
 
@@ -731,6 +749,8 @@ export function PaneDivider({ ariaLabel, value, onChange, side }: DividerProps) 
       const step = e.shiftKey ? 48 : 16;
       if (e.key === 'ArrowLeft') onChange(value + (side === 'left' ? -step : step));
       else if (e.key === 'ArrowRight') onChange(value + (side === 'left' ? step : -step));
+      else if (e.key === 'Home') onChange(PANE_MIN);
+      else if (e.key === 'End') onChange(PANE_MAX);
       else return;
       e.preventDefault();
     },
@@ -743,6 +763,11 @@ export function PaneDivider({ ariaLabel, value, onChange, side }: DividerProps) 
       aria-orientation="vertical"
       aria-label={ariaLabel}
       aria-valuenow={value}
+      // A focusable, movable separator must publish its range, and identify
+      // what it resizes.
+      aria-valuemin={PANE_MIN}
+      aria-valuemax={PANE_MAX}
+      aria-controls={controls}
       tabIndex={0}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -753,6 +778,11 @@ export function PaneDivider({ ariaLabel, value, onChange, side }: DividerProps) 
   );
 }
 ```
+
+`DividerProps` gains `controls: string` — the `id` of the `<aside>` this divider
+resizes — and the module imports `PANE_MIN` / `PANE_MAX` from `@/stores/ui`. `AppShell`
+gives its two `<aside>` elements stable ids (`sidebar-pane`, `detail-pane`) and passes
+them through.
 
 - [ ] **Step 7: Write `src/app/AppShell.tsx`**
 
