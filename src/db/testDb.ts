@@ -9,6 +9,18 @@ import type { Tx } from './client';
 export function createTestDb(): {
   db: BetterSQLite3Database<typeof schema>;
   tx: Tx;
+  /**
+   * Mirrors production's `transaction()` in `src/db/client.ts`: runs `fn`
+   * inside a real BEGIN/COMMIT, ROLLBACK-ing (and rethrowing) on any throw.
+   *
+   * better-sqlite3's own `sqlite.transaction(fn)` wrapper requires a
+   * *synchronous* callback, but `fn` here (and `runMigrations`, its only
+   * caller today) is async — wrapping it would silently return before the
+   * awaited work finished, which is worse than not wrapping at all. Explicit
+   * BEGIN/COMMIT/ROLLBACK statements around the callback give the same
+   * atomicity without that trap.
+   */
+  transaction: <R>(fn: (tx: Tx) => Promise<R>) => Promise<R>;
   close: () => void;
 } {
   const sqlite = new Database(':memory:');
@@ -22,5 +34,16 @@ export function createTestDb(): {
       return sqlite.prepare(sql).all(...(params as never[])) as T[];
     },
   };
-  return { db, tx, close: () => sqlite.close() };
+  const transaction = async <R>(fn: (tx: Tx) => Promise<R>): Promise<R> => {
+    sqlite.prepare('BEGIN').run();
+    try {
+      const result = await fn(tx);
+      sqlite.prepare('COMMIT').run();
+      return result;
+    } catch (err) {
+      sqlite.prepare('ROLLBACK').run();
+      throw err;
+    }
+  };
+  return { db, tx, transaction, close: () => sqlite.close() };
 }

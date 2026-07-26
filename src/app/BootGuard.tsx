@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { checkEnvironment } from '@/db/client';
+import { checkEnvironment } from '@/db/environment';
 
 export function BootGuard({ children }: { children: ReactNode }) {
   const result = checkEnvironment();

@@ -52,32 +52,9 @@ export function transaction<R>(fn: (tx: Tx) => Promise<R>): Promise<R> {
   });
 }
 
-/**
- * SQLocal needs a Worker, OPFS, and cross-origin isolation. Without isolation
- * the browser blocks OPFS and every write is silently discarded, so this must
- * fail loudly at boot rather than let the app appear to work.
- */
-export function checkEnvironment(): { ok: true } | { ok: false; reason: string; fix: string } {
-  if (typeof Worker === 'undefined') {
-    return {
-      ok: false,
-      reason: 'This browser does not support Web Workers.',
-      fix: 'Use a current version of Chrome, Edge, Firefox, Brave, or Safari.',
-    };
-  }
-  if (!navigator.storage?.getDirectory) {
-    return {
-      ok: false,
-      reason: 'This browser does not support the Origin Private File System.',
-      fix: 'Use Chrome/Edge 108+, Firefox 111+, or Safari 17+.',
-    };
-  }
-  if (!crossOriginIsolated) {
-    return {
-      ok: false,
-      reason: 'This page is not cross-origin isolated, so the browser blocks database storage.',
-      fix: 'Serve the app with the headers "Cross-Origin-Opener-Policy: same-origin" and "Cross-Origin-Embedder-Policy: credentialless".',
-    };
-  }
-  return { ok: true };
-}
+// `checkEnvironment` used to live here, but this module constructs
+// `new SQLocalDrizzle(...)` above at module scope (which spins up a Web
+// Worker as a side effect of being *imported*, not of being called) — so
+// anything that needs to check the environment before deciding whether to
+// touch the database must not import this file to do it. It now lives in
+// `./environment`, which has no such side effect.

@@ -24,8 +24,8 @@ const sql = readdirSync(DIR)
  * `migrate.test.ts`.
  */
 async function createDb() {
-  const { db, tx, close } = createTestDb();
-  await runMigrations(tx);
+  const { db, transaction, close } = createTestDb();
+  await transaction((tx) => runMigrations(tx));
   return { db, close };
 }
 
