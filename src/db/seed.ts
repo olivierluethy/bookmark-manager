@@ -23,11 +23,26 @@ export const SYSTEM_FOLDERS: readonly {
  * check would be the thing to fix, not a catch around the constraint error).
  */
 export async function seedSystemFolders(db: Db, tx: Tx): Promise<void> {
-  const existing = await db
-    .select({ systemKey: folders.systemKey })
-    .from(folders)
-    .where(eq(folders.isSystem, true));
-  const present = new Set(existing.map((r) => r.systemKey));
+  // Executed through `tx.all`, not `db`: this function runs inside
+  // `transaction()` (see boot.ts), and a `db`-issued read from in there would
+  // be an outside query on SQLocal's exclusive transaction connection —
+  // blocking forever waiting for the very transaction it's nested inside to
+  // finish. See the deadlock note on `Tx`/`transaction()` in `./client`.
+  //
+  // Written as hand-rolled SQL (matching `runMigrations`'s style) rather than
+  // a Drizzle `.select({...}).toSQL()`: Drizzle's query builder only remaps
+  // a result row's snake_case columns back to camelCase JS keys (here,
+  // `system_key` -> `systemKey`) when *it* executes the query and runs its
+  // own result mapping. `tx.all` executes raw SQL directly against the
+  // driver, which returns rows keyed by the actual column name — so a
+  // `.toSQL()`'d select naively read back through `.systemKey` would read
+  // `undefined` off every row (this was caught by the idempotency tests
+  // failing with a duplicate-key constraint violation, not silently).
+  const existing = await tx.all<{ system_key: string }>(
+    'SELECT system_key FROM folders WHERE is_system = 1',
+    [],
+  );
+  const present = new Set(existing.map((r) => r.system_key));
   const now = Math.floor(Date.now() / 1000);
 
   for (const folder of SYSTEM_FOLDERS) {
@@ -49,6 +64,16 @@ export async function seedSystemFolders(db: Db, tx: Tx): Promise<void> {
   }
 }
 
+/**
+ * Reads through `db` directly — safe only because this is called *outside*
+ * any `transaction()` callback (every current call site awaits it before or
+ * after a transaction, never inside one). Calling this from inside a
+ * `transaction()` callback would deadlock for the same reason documented on
+ * `Tx`/`transaction()` in `./client`: it would be an outside-`db` read
+ * competing with that transaction's exclusive lock. If a future caller ever
+ * needs this data mid-transaction, give it a `tx`-based read instead of
+ * calling this function from in there.
+ */
 export async function getSystemFolderId(db: Db, key: SystemKey): Promise<string> {
   const [row] = await db
     .select({ id: folders.id })

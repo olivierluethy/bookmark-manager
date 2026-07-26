@@ -17,6 +17,29 @@ import * as schema from './schema';
  * convert-rows-to-objects helper, and better-sqlite3's `.all()` returns
  * objects natively — so both implementations below satisfy this without
  * extra conversion.
+ *
+ * THE RULE, and why it is not optional: inside a `transaction()` callback,
+ * every *execution* — read or write — must go through `Tx` (`tx.exec` for
+ * writes, `tx.all` for reads). `db` may still appear in that callback, but
+ * only to *build* a statement via Drizzle's query builder (`.toSQL()`,
+ * which serializes and executes nothing) before handing the SQL to `tx`.
+ * Never `await` a `db.select()` / `db.all()` / any Drizzle query inside a
+ * transaction callback.
+ *
+ * Why: SQLocal's `transaction()` holds an exclusive connection-scoped lock
+ * for the callback's whole duration. A query issued through `db` from
+ * inside that callback is an *outside* query on that same connection — it
+ * blocks waiting for the transaction to finish, while the transaction
+ * blocks waiting for the callback to return. That is a silent, permanent
+ * deadlock: no exception, no console output, the app just never renders.
+ * This is exactly what SQLocal's own docs warn about when they say
+ * Drizzle's transaction method "cannot isolate transactions from outside
+ * queries." It will not reproduce against better-sqlite3 in Node, because
+ * `createTestDb()` gives `db` and `tx` the same connection with no locking
+ * — a read issued through `db` inside a BEGIN/COMMIT just works there. Do
+ * not use that as evidence it is safe; use `createTestDb({
+ * trapDbInTransaction: true })` instead, which makes Node fail loudly for
+ * this exact pattern.
  */
 export type Tx = {
   exec(sql: string, params: unknown[]): Promise<void>;
@@ -38,6 +61,15 @@ export const sqlocal = new SQLocalDrizzle({
 
 export const db: Db = drizzle(sqlocal.driver, sqlocal.batchDriver, { schema });
 
+/**
+ * Runs `fn` inside a single exclusive SQLocal transaction. See the rule
+ * documented on `Tx` above: `fn` must execute everything through the `tx`
+ * it is given (`tx.exec`/`tx.all`), never by awaiting a query through the
+ * module-level `db`. Doing so deadlocks — the transaction's exclusive lock
+ * blocks the `db` query, and `fn` (holding that same lock open) blocks
+ * waiting for `fn` to return — silently and forever, with no error and no
+ * console output, which in the app means `#root` never renders.
+ */
 export function transaction<R>(fn: (tx: Tx) => Promise<R>): Promise<R> {
   return sqlocal.transaction(async (handle) => {
     const tx: Tx = {

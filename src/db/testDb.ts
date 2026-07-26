@@ -6,7 +6,69 @@ import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema';
 import type { Tx } from './client';
 
-export function createTestDb(): {
+export const DB_INSIDE_TRANSACTION_MESSAGE =
+  'query executed through db inside a transaction — use tx';
+
+/**
+ * Wraps a prepared statement so any of its execute methods throw while
+ * `isTransactionOpen()` is true. `.raw()` returns the same guarded proxy
+ * (not the unwrapped statement `better-sqlite3` itself returns) so a
+ * `stmt.raw().get(...)` chain — which is how Drizzle reads rows in raw mode
+ * — stays guarded too.
+ */
+function guardStatement<T extends Database.Statement>(stmt: T, isTransactionOpen: () => boolean): T {
+  const guard = <A extends unknown[], R>(fn: (...args: A) => R) =>
+    (...args: A): R => {
+      if (isTransactionOpen()) throw new Error(DB_INSIDE_TRANSACTION_MESSAGE);
+      return fn(...args);
+    };
+  return new Proxy(stmt, {
+    get(target, prop, receiver) {
+      if (prop === 'run' || prop === 'all' || prop === 'get' || prop === 'iterate') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- better-sqlite3's Statement methods are heavily overloaded; binding them generically here would need to reproduce those overloads, which buys nothing over trusting the underlying method's own runtime signature.
+        return guard((target[prop] as (...a: any[]) => unknown).bind(target));
+      }
+      if (prop === 'raw') {
+        return (...args: [] | [boolean]) => {
+          target.raw(...args);
+          return receiver as T;
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+}
+
+/**
+ * Wraps the raw `better-sqlite3` handle passed to Drizzle's `db` so every
+ * statement it prepares is guarded (see `guardStatement`). `tx`/`transaction`
+ * below are built from the *unwrapped* `sqlite` reference, never this one —
+ * only `db` executions are ever trapped.
+ */
+function guardDatabase(sqlite: Database.Database, isTransactionOpen: () => boolean): Database.Database {
+  return new Proxy(sqlite, {
+    get(target, prop, receiver) {
+      if (prop === 'prepare') {
+        return (...args: [string]) => guardStatement(target.prepare(...args), isTransactionOpen);
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+}
+
+export function createTestDb(options?: {
+  /**
+   * When true, any query executed through the returned `db` while a
+   * `transaction()` callback is in flight (between BEGIN and
+   * COMMIT/ROLLBACK) throws `DB_INSIDE_TRANSACTION_MESSAGE` instead of
+   * running. This is how Node — which otherwise cannot reproduce the
+   * browser deadlock, since `db` and `tx` share one unlocked connection
+   * here — still catches the forbidden pattern that causes it: awaiting a
+   * `db` query inside a `transaction()` callback. See the rule documented
+   * on `Tx`/`transaction()` in `./client`.
+   */
+  trapDbInTransaction?: boolean;
+}): {
   db: BetterSQLite3Database<typeof schema>;
   tx: Tx;
   /**
@@ -25,7 +87,13 @@ export function createTestDb(): {
 } {
   const sqlite = new Database(':memory:');
   sqlite.pragma('foreign_keys = ON');
-  const db = drizzle(sqlite, { schema });
+
+  let transactionOpen = false;
+  const dbConnection = options?.trapDbInTransaction
+    ? guardDatabase(sqlite, () => transactionOpen)
+    : sqlite;
+  const db = drizzle(dbConnection, { schema });
+
   const tx: Tx = {
     exec: async (sql, params) => {
       sqlite.prepare(sql).run(...(params as never[]));
@@ -36,6 +104,7 @@ export function createTestDb(): {
   };
   const transaction = async <R>(fn: (tx: Tx) => Promise<R>): Promise<R> => {
     sqlite.prepare('BEGIN').run();
+    transactionOpen = true;
     try {
       const result = await fn(tx);
       sqlite.prepare('COMMIT').run();
@@ -43,6 +112,8 @@ export function createTestDb(): {
     } catch (err) {
       sqlite.prepare('ROLLBACK').run();
       throw err;
+    } finally {
+      transactionOpen = false;
     }
   };
   return { db, tx, transaction, close: () => sqlite.close() };

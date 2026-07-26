@@ -1,5 +1,6 @@
+import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createTestDb } from '@/db/testDb';
+import { createTestDb, DB_INSIDE_TRANSACTION_MESSAGE } from '@/db/testDb';
 import { runMigrations } from '@/db/migrate';
 import { getSystemFolderId, seedSystemFolders, SYSTEM_FOLDERS, unsortedFilter } from '@/db/seed';
 import { bookmarks, folders } from '@/db/schema';
@@ -124,5 +125,47 @@ describe('unsortedFilter', () => {
     const rows = await db.select().from(bookmarks).where(unsortedFilter(unsortedId));
     expect(rows.map((r) => r.id).sort()).toEqual(['b-null', 'b-unsorted-id']);
     close();
+  });
+});
+
+/**
+ * A real SQLocal deadlock can't be reproduced against better-sqlite3 — `db`
+ * and `tx` share one unlocked connection in Node, so a `db` read inside a
+ * BEGIN/COMMIT just works there, which is exactly how this bug shipped.
+ * `createTestDb({ trapDbInTransaction: true })` instead makes Node *detect
+ * the forbidden pattern* (a query executed through `db` while a
+ * `transaction()` callback is open) and throw, rather than trying to
+ * reproduce the hang itself.
+ */
+describe('createTestDb trapDbInTransaction (Node-reproducible regression for the browser deadlock)', () => {
+  it('lets seedSystemFolders complete cleanly — it now reads exclusively through tx', async () => {
+    const { db: trapDb, transaction, close: trapClose } = createTestDb({ trapDbInTransaction: true });
+    await transaction((t) => runMigrations(t));
+
+    await expect(
+      transaction((t) => seedSystemFolders(asDb(trapDb), t)),
+    ).resolves.toBeUndefined();
+
+    expect(await trapDb.select().from(folders)).toHaveLength(3);
+    trapClose();
+  });
+
+  it('fires when a function awaits a db query while a transaction is open — proving the trap has teeth, i.e. it would have caught the pre-fix seedSystemFolders', async () => {
+    const { db: trapDb, transaction, close: trapClose } = createTestDb({ trapDbInTransaction: true });
+    await transaction((t) => runMigrations(t));
+
+    // Reproduces the exact shape of the bug this fixes: an existence check
+    // awaited through `db` from inside a `transaction()` callback.
+    async function readThroughDbInsideTransaction(): Promise<void> {
+      await trapDb
+        .select({ systemKey: folders.systemKey })
+        .from(folders)
+        .where(eq(folders.isSystem, true));
+    }
+
+    await expect(transaction(() => readThroughDbInsideTransaction())).rejects.toThrow(
+      DB_INSIDE_TRANSACTION_MESSAGE,
+    );
+    trapClose();
   });
 });
