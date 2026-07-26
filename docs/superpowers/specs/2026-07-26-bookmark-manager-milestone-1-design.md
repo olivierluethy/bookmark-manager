@@ -94,9 +94,37 @@ export const db = drizzle(sqlocal.driver, sqlocal.batchDriver, { schema });
 explicitly that Drizzle's `transaction()` cannot isolate transactions from outside
 queries. This applies to migrations and to batched import inserts.
 
-The exact constructor options object, the presence of a third `{ schema }` argument, and
-the `transaction()` signature are to be confirmed against the installed package's types
-as the first task of the data-layer phase, before anything is built on top.
+**Verified against `sqlocal@0.18.0` and `drizzle-orm@0.45.2` type definitions:**
+
+```ts
+// sqlocal/dist/client.d.ts
+constructor(databasePath: DatabasePath);
+constructor(config: ClientConfig);           // { databasePath, verbose?, onInit? }
+transaction: <R>(tx: (tx: TransactionHandle) => Promise<R>) => Promise<R>;
+getDatabaseFile: () => Promise<File>;        // enables Milestone 2 backup/restore
+overwriteDatabaseFile: (file: File | Blob | ArrayBuffer | ...) => Promise<void>;
+
+// sqlocal/dist/types.d.ts
+type TransactionHandle = Pick<Transaction, 'query' | 'sql' | 'batch'>;
+//   tx.sql<R>(queryTemplate: TemplateStringsArray | string, ...params: unknown[])
+
+// drizzle-orm/sqlite-proxy — the 3-arg overload exists, so `{ schema }` is valid
+declare function drizzle<TSchema>(cb, batchCb?, config?: DrizzleConfig<TSchema>)
+```
+
+**Consequence — the transaction handle is not a Drizzle database.** `TransactionHandle`
+exposes only `query`, `sql`, and `batch`. Drizzle query builders **cannot** be executed
+against it directly. Inside a transaction, statements must be built with Drizzle and then
+run as raw SQL:
+
+```ts
+const built = db.insert(bookmarks).values(rows).toSQL(); // { sql, params }
+await tx.sql(built.sql, ...built.params);
+```
+
+This shapes the write path: repositories build statements with Drizzle for type safety,
+then execute them through a narrow `Tx` interface (§9), which is what makes Node-side
+testing possible.
 
 ### 3.2 Cross-origin isolation — a hard requirement
 
@@ -110,8 +138,11 @@ Cross-Origin-Embedder-Policy: credentialless
 
 Without them the browser blocks OPFS access and **no data persists across a refresh**.
 
-- `sqlocal/vite` sets these for the dev server automatically and handles Worker
-  compilation. It does **not** configure production.
+- `sqlocal/vite` sets cross-origin isolation headers for the dev server and handles
+  Worker compilation, but **it sets `require-corp`, not `credentialless`** (verified in
+  `sqlocal/dist/vite/index.js`), and it does not configure production at all. The plugin
+  is therefore configured as `sqlocal({ coi: false })` and a small custom Vite plugin
+  sets the headers instead, so development and production match exactly.
 - `credentialless` is chosen over `require-corp` because `require-corp` blocks
   cross-origin images (favicons) and cross-origin iframes unless the remote host sends
   CORP headers, which almost none do. That would foreclose the Milestone 2 preview
@@ -482,12 +513,27 @@ Vitest. The pure-core architecture is what makes this tractable.
 - `browserDetect` — each supported browser's signals, including Brave being detected as
   Brave and not Chrome.
 
-**Repository tests (Node, real SQL):** OPFS does not exist in Node, so repository
-functions accept a `db` parameter and tests run the *same schema and migrations* against
-`better-sqlite3` with Drizzle's better-sqlite3 driver. The SQL and the schema are
-genuinely verified; only the storage backend differs from production. This is a
-deliberate, documented tradeoff — it does not exercise the SQLocal proxy layer, which is
-covered instead by the manual boot check in §10.
+**Repository tests (Node, real SQL):** OPFS does not exist in Node, so repositories are
+written against two injected seams rather than module singletons:
+
+```ts
+// Reads: a Drizzle database instance.
+type Db = SqliteRemoteDatabase<typeof schema> | BetterSQLite3Database<typeof schema>;
+
+// Writes inside a transaction: a narrow executor, because TransactionHandle
+// is not a Drizzle database (§3.1).
+type Tx = { exec(sql: string, params: unknown[]): Promise<void> };
+```
+
+Production supplies a `Tx` backed by `sqlocal.transaction()`; tests supply one backed by
+`better-sqlite3`. Tests run the *same schema and the same migration SQL*, so the SQL, the
+schema, and the transaction batching logic are all genuinely verified. Only the storage
+backend differs from production.
+
+This is a deliberate, documented tradeoff: it does **not** exercise the SQLocal worker
+proxy or OPFS itself. Those are covered by the manual boot check in §10 and by the
+first task of the data-layer phase, which verifies a real round-trip in a real browser
+before anything is built on top.
 
 **Performance:** a generated 20,000-bookmark fixture used to verify list interaction
 stays responsive and import does not block the UI.
