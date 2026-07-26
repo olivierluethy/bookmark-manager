@@ -12,6 +12,14 @@ describe('ui store layout', () => {
     expect(useUiStore.getState().sidebarWidth).toBe(PANE_MAX);
   });
 
+  it('clamps the detail pane width to the allowed range', () => {
+    useUiStore.getState().setDetailWidth(10);
+    expect(useUiStore.getState().detailWidth).toBe(PANE_MIN);
+
+    useUiStore.getState().setDetailWidth(9999);
+    expect(useUiStore.getState().detailWidth).toBe(PANE_MAX);
+  });
+
   it('toggles pane collapse independently', () => {
     useUiStore.getState().toggleSidebar();
     expect(useUiStore.getState().sidebarCollapsed).toBe(true);
@@ -21,5 +29,24 @@ describe('ui store layout', () => {
   it('defaults to comfortable density and list view', () => {
     expect(useUiStore.getState().density).toBe('comfortable');
     expect(useUiStore.getState().viewMode).toBe('list');
+  });
+
+  it('sets the view mode', () => {
+    useUiStore.getState().setViewMode('cards');
+    expect(useUiStore.getState().viewMode).toBe('cards');
+
+    useUiStore.getState().setViewMode('compact');
+    expect(useUiStore.getState().viewMode).toBe('compact');
+  });
+
+  it('sets the density', () => {
+    useUiStore.getState().setDensity('compact');
+    expect(useUiStore.getState().density).toBe('compact');
+  });
+
+  it('sets the sort key and direction', () => {
+    useUiStore.getState().setSort('title', 'asc');
+    expect(useUiStore.getState().sortKey).toBe('title');
+    expect(useUiStore.getState().sortDir).toBe('asc');
   });
 });

@@ -19,6 +19,7 @@ export function AppShell({ sidebar, main, detail }: Props) {
       {!sidebarCollapsed && (
         <>
           <aside
+            id="sidebar-pane"
             style={{ width: sidebarWidth }}
             className="shrink-0 overflow-y-auto border-r border-line bg-surface"
           >
@@ -26,6 +27,7 @@ export function AppShell({ sidebar, main, detail }: Props) {
           </aside>
           <PaneDivider
             ariaLabel="Resize sidebar"
+            ariaControls="sidebar-pane"
             value={sidebarWidth}
             onChange={setSidebarWidth}
             side="left"
@@ -39,11 +41,13 @@ export function AppShell({ sidebar, main, detail }: Props) {
         <>
           <PaneDivider
             ariaLabel="Resize detail pane"
+            ariaControls="detail-pane"
             value={detailWidth}
             onChange={setDetailWidth}
             side="right"
           />
           <aside
+            id="detail-pane"
             style={{ width: detailWidth }}
             className="shrink-0 overflow-y-auto border-l border-line bg-surface"
           >
