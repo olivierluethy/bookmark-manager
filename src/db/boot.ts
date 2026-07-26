@@ -1,4 +1,4 @@
-import type { Db, Tx } from './client';
+import type { QueryDb, Tx } from './client';
 import { runMigrations } from './migrate';
 import { seedSystemFolders } from './seed';
 
@@ -14,7 +14,7 @@ import { seedSystemFolders } from './seed';
  * context, so it is guarded defensively rather than assumed.
  */
 export async function bootDatabase(
-  db: Db,
+  db: QueryDb,
   transaction: <R>(fn: (tx: Tx) => Promise<R>) => Promise<R>,
 ): Promise<void> {
   const run = async () => {

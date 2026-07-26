@@ -1,5 +1,5 @@
 import { eq, isNull, or, type SQL } from 'drizzle-orm';
-import type { Db, Tx } from './client';
+import type { QueryDb, Tx } from './client';
 import { bookmarks, folders, type SystemKey } from './schema';
 
 export const SYSTEM_FOLDERS: readonly {
@@ -22,7 +22,7 @@ export const SYSTEM_FOLDERS: readonly {
  * this function should ever hit (and, if it disagreed with this check, the
  * check would be the thing to fix, not a catch around the constraint error).
  */
-export async function seedSystemFolders(db: Db, tx: Tx): Promise<void> {
+export async function seedSystemFolders(db: QueryDb, tx: Tx): Promise<void> {
   // Executed through `tx.all`, not `db`: this function runs inside
   // `transaction()` (see boot.ts), and a `db`-issued read from in there would
   // be an outside query on SQLocal's exclusive transaction connection —
@@ -74,7 +74,7 @@ export async function seedSystemFolders(db: Db, tx: Tx): Promise<void> {
  * needs this data mid-transaction, give it a `tx`-based read instead of
  * calling this function from in there.
  */
-export async function getSystemFolderId(db: Db, key: SystemKey): Promise<string> {
+export async function getSystemFolderId(db: QueryDb, key: SystemKey): Promise<string> {
   const [row] = await db
     .select({ id: folders.id })
     .from(folders)

@@ -1,6 +1,8 @@
 import { SQLocalDrizzle } from 'sqlocal/drizzle';
 import { drizzle } from 'drizzle-orm/sqlite-proxy';
-import type { SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy';
+import type { SqliteRemoteDatabase, SqliteRemoteResult } from 'drizzle-orm/sqlite-proxy';
+import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core';
+import type { RunResult } from 'better-sqlite3';
 import * as schema from './schema';
 
 /**
@@ -47,6 +49,50 @@ export type Tx = {
 };
 
 export type Db = SqliteRemoteDatabase<typeof schema>;
+
+/**
+ * The only database surface repositories may take. Deliberately excludes
+ * run/all/get/values/batch/transaction: those differ between the async
+ * sqlite-proxy driver used in the browser and the sync better-sqlite3 driver
+ * used in tests, and every browser-only bug in this project so far has come
+ * from that divergence. Execute through the Tx seam instead.
+ *
+ * Neither of the two obvious formulations works here, so this uses a third:
+ *
+ * - `Pick<Db, 'select' | 'insert' | 'update' | 'delete'>` was tried first and
+ *   rejected: Drizzle's query builders carry a `"sync" | "async"` result-kind
+ *   type parameter through `insert`/`update`/`delete`'s return types (e.g.
+ *   `SQLiteInsertBase<..., "async", SqliteRemoteResult<unknown>, ...>` for
+ *   `Db` vs `SQLiteInsertBase<..., "sync", RunResult, ...>` for
+ *   `BetterSQLite3Database`), so `Pick` on `Db` alone is only ever satisfied
+ *   by an actual async driver — a sync `BetterSQLite3Database` is not
+ *   assignable to it.
+ * - A plain union of the two concrete driver types (`SqliteRemoteDatabase |
+ *   BetterSQLite3Database`) was tried next and also rejected: `select` is
+ *   *overloaded* (a 0-arg "select all columns" form and a generic
+ *   fields-object form), and TypeScript collapses a union of two classes'
+ *   overloaded methods down to only the shared non-generic signature —
+ *   calling `db.select({ value: settings.value })` where `db` has this union
+ *   type fails with "Expected 0 arguments, but got 1", even though both
+ *   concrete classes individually accept it fine.
+ *
+ * What works: both driver classes are instantiations of the *same* generic
+ * `BaseSQLiteDatabase<TResultKind, TRunResult, TSchema>` base — `Db` is
+ * `BaseSQLiteDatabase<'async', SqliteRemoteResult, ...>`,
+ * `BetterSQLite3Database` is `BaseSQLiteDatabase<'sync', RunResult, ...>`.
+ * Naming that *one* shared class with both result kinds unioned into its
+ * type arguments (rather than unioning two separate instantiations of it)
+ * keeps `select`'s overloads intact — there is only one class here, so no
+ * union-of-methods collapse — while still being a strict supertype either
+ * concrete driver is assignable to. `Pick`ing off only the four builder
+ * methods from that is what actually excludes run/all/get/values/batch/
+ * transaction (`batch` isn't on the shared base at all — it's declared only
+ * on `SqliteRemoteDatabase` itself — so it's excluded automatically).
+ */
+export type QueryDb = Pick<
+  BaseSQLiteDatabase<'sync' | 'async', RunResult | SqliteRemoteResult, typeof schema>,
+  'select' | 'insert' | 'update' | 'delete'
+>;
 
 export const sqlocal = new SQLocalDrizzle({
   databasePath: 'bookmarks.sqlite3',

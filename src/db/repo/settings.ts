@@ -1,9 +1,9 @@
 import { eq } from 'drizzle-orm';
-import type { Db, Tx } from '../client';
+import type { QueryDb, Tx } from '../client';
 import { settings } from '../schema';
 
 /** Values are JSON. A corrupt value yields the fallback rather than throwing. */
-export async function getSetting<T>(db: Db, key: string, fallback: T): Promise<T> {
+export async function getSetting<T>(db: QueryDb, key: string, fallback: T): Promise<T> {
   const [row] = await db
     .select({ value: settings.value })
     .from(settings)
@@ -17,7 +17,7 @@ export async function getSetting<T>(db: Db, key: string, fallback: T): Promise<T
   }
 }
 
-export async function setSetting(db: Db, tx: Tx, key: string, value: unknown): Promise<void> {
+export async function setSetting(db: QueryDb, tx: Tx, key: string, value: unknown): Promise<void> {
   const built = db
     .insert(settings)
     .values({ key, value: JSON.stringify(value) })

@@ -4,7 +4,7 @@ import { createTestDb, DB_INSIDE_TRANSACTION_MESSAGE } from '@/db/testDb';
 import { runMigrations } from '@/db/migrate';
 import { getSystemFolderId, seedSystemFolders, SYSTEM_FOLDERS, unsortedFilter } from '@/db/seed';
 import { bookmarks, folders } from '@/db/schema';
-import type { Db, Tx } from '@/db/client';
+import type { Tx } from '@/db/client';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '@/db/schema';
 
@@ -14,19 +14,6 @@ let close: () => void;
 
 const now = 1700000000;
 
-/**
- * `seedSystemFolders`/`getSystemFolderId` are typed against production's
- * `Db` (`SqliteRemoteDatabase`, async), which is the interface Task 7
- * specifies. The test harness's `BetterSQLite3Database` (sync) implements
- * every member either function actually calls — `select`, `insert`,
- * `toSQL` — and only lacks `batch`, which neither calls. Asserting the type
- * here lets the same production functions run against both engines without
- * loosening their public signature to a bespoke union or generic.
- */
-function asDb(d: BetterSQLite3Database<typeof schema>): Db {
-  return d as unknown as Db;
-}
-
 beforeEach(async () => {
   ({ db, tx, close } = createTestDb());
   await runMigrations(tx);
@@ -34,7 +21,7 @@ beforeEach(async () => {
 
 describe('seedSystemFolders', () => {
   it('creates exactly the three system folders', async () => {
-    await seedSystemFolders(asDb(db), tx);
+    await seedSystemFolders(db, tx);
     const rows = await db.select().from(folders);
     expect(rows).toHaveLength(3);
     expect(rows.every((r) => r.isSystem)).toBe(true);
@@ -43,18 +30,18 @@ describe('seedSystemFolders', () => {
   });
 
   it('is idempotent across repeated boots', async () => {
-    await seedSystemFolders(asDb(db), tx);
-    await seedSystemFolders(asDb(db), tx);
-    await seedSystemFolders(asDb(db), tx);
+    await seedSystemFolders(db, tx);
+    await seedSystemFolders(db, tx);
+    await seedSystemFolders(db, tx);
     expect(await db.select().from(folders)).toHaveLength(3);
     close();
   });
 
   it('preserves the original id so bookmarks keep their folder across boots', async () => {
-    await seedSystemFolders(asDb(db), tx);
-    const first = await getSystemFolderId(asDb(db), 'unsorted');
-    await seedSystemFolders(asDb(db), tx);
-    expect(await getSystemFolderId(asDb(db), 'unsorted')).toBe(first);
+    await seedSystemFolders(db, tx);
+    const first = await getSystemFolderId(db, 'unsorted');
+    await seedSystemFolders(db, tx);
+    expect(await getSystemFolderId(db, 'unsorted')).toBe(first);
     close();
   });
 
@@ -66,15 +53,15 @@ describe('seedSystemFolders', () => {
 
 describe('getSystemFolderId', () => {
   it('throws when seeding has not run', async () => {
-    await expect(getSystemFolderId(asDb(db), 'unsorted')).rejects.toThrow(/missing/);
+    await expect(getSystemFolderId(db, 'unsorted')).rejects.toThrow(/missing/);
     close();
   });
 });
 
 describe('unsortedFilter', () => {
   it('matches a bookmark whose folder_id is NULL and one explicitly set to the unsorted id, but not a bookmark in another folder', async () => {
-    await seedSystemFolders(asDb(db), tx);
-    const unsortedId = await getSystemFolderId(asDb(db), 'unsorted');
+    await seedSystemFolders(db, tx);
+    const unsortedId = await getSystemFolderId(db, 'unsorted');
 
     await db.insert(folders).values({
       id: 'other-folder',
@@ -132,18 +119,18 @@ describe('unsortedFilter', () => {
  * A real SQLocal deadlock can't be reproduced against better-sqlite3 — `db`
  * and `tx` share one unlocked connection in Node, so a `db` read inside a
  * BEGIN/COMMIT just works there, which is exactly how this bug shipped.
- * `createTestDb({ trapDbInTransaction: true })` instead makes Node *detect
- * the forbidden pattern* (a query executed through `db` while a
- * `transaction()` callback is open) and throw, rather than trying to
- * reproduce the hang itself.
+ * `createTestDb()` instead makes Node *detect the forbidden pattern* (a
+ * query executed through `db` while a `transaction()` callback is open) and
+ * throw, rather than trying to reproduce the hang itself — the trap is on
+ * by default, so this is just `createTestDb()`, not an opt-in.
  */
 describe('createTestDb trapDbInTransaction (Node-reproducible regression for the browser deadlock)', () => {
   it('lets seedSystemFolders complete cleanly — it now reads exclusively through tx', async () => {
-    const { db: trapDb, transaction, close: trapClose } = createTestDb({ trapDbInTransaction: true });
+    const { db: trapDb, transaction, close: trapClose } = createTestDb();
     await transaction((t) => runMigrations(t));
 
     await expect(
-      transaction((t) => seedSystemFolders(asDb(trapDb), t)),
+      transaction((t) => seedSystemFolders(trapDb, t)),
     ).resolves.toBeUndefined();
 
     expect(await trapDb.select().from(folders)).toHaveLength(3);
@@ -151,7 +138,7 @@ describe('createTestDb trapDbInTransaction (Node-reproducible regression for the
   });
 
   it('fires when a function awaits a db query while a transaction is open — proving the trap has teeth, i.e. it would have caught the pre-fix seedSystemFolders', async () => {
-    const { db: trapDb, transaction, close: trapClose } = createTestDb({ trapDbInTransaction: true });
+    const { db: trapDb, transaction, close: trapClose } = createTestDb();
     await transaction((t) => runMigrations(t));
 
     // Reproduces the exact shape of the bug this fixes: an existence check

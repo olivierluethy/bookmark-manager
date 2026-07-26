@@ -41,15 +41,27 @@ function guardStatement<T extends Database.Statement>(stmt: T, isTransactionOpen
 
 /**
  * Wraps the raw `better-sqlite3` handle passed to Drizzle's `db` so every
- * statement it prepares is guarded (see `guardStatement`). `tx`/`transaction`
- * below are built from the *unwrapped* `sqlite` reference, never this one —
- * only `db` executions are ever trapped.
+ * statement it prepares is guarded (see `guardStatement`), and so
+ * `.transaction`, `.exec`, and `.pragma` — the other three entry points on
+ * `Database.prototype` that execute SQL immediately, without going through
+ * `.prepare` first — throw the same way if called while a transaction is
+ * open. `tx`/`transaction` below are built from the *unwrapped* `sqlite`
+ * reference, never this one — only `db` executions are ever trapped.
  */
 function guardDatabase(sqlite: Database.Database, isTransactionOpen: () => boolean): Database.Database {
+  const guard = <A extends unknown[], R>(fn: (...args: A) => R) =>
+    (...args: A): R => {
+      if (isTransactionOpen()) throw new Error(DB_INSIDE_TRANSACTION_MESSAGE);
+      return fn(...args);
+    };
   return new Proxy(sqlite, {
     get(target, prop, receiver) {
       if (prop === 'prepare') {
         return (...args: [string]) => guardStatement(target.prepare(...args), isTransactionOpen);
+      }
+      if (prop === 'exec' || prop === 'pragma' || prop === 'transaction') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- these three methods are heavily overloaded on better-sqlite3's Database type; binding them generically here would need to reproduce those overloads, which buys nothing over trusting the underlying method's own runtime signature.
+        return guard((target[prop] as (...a: any[]) => unknown).bind(target));
       }
       return Reflect.get(target, prop, receiver);
     },
@@ -58,14 +70,21 @@ function guardDatabase(sqlite: Database.Database, isTransactionOpen: () => boole
 
 export function createTestDb(options?: {
   /**
-   * When true, any query executed through the returned `db` while a
-   * `transaction()` callback is in flight (between BEGIN and
-   * COMMIT/ROLLBACK) throws `DB_INSIDE_TRANSACTION_MESSAGE` instead of
-   * running. This is how Node — which otherwise cannot reproduce the
-   * browser deadlock, since `db` and `tx` share one unlocked connection
+   * Covers every immediate-execution entry point on the guarded `db`
+   * connection: `.prepare(...).run/all/get/iterate` (including a
+   * `.raw()`-chained call), and `.exec`, `.pragma`, `.transaction` called
+   * directly on the connection. Any of these, called through the returned
+   * `db` while a `transaction()` callback is in flight (between BEGIN and
+   * COMMIT/ROLLBACK), throws `DB_INSIDE_TRANSACTION_MESSAGE` instead of
+   * running.
+   *
+   * Defaults to `true`. This is how Node — which otherwise cannot reproduce
+   * the browser deadlock, since `db` and `tx` share one unlocked connection
    * here — still catches the forbidden pattern that causes it: awaiting a
    * `db` query inside a `transaction()` callback. See the rule documented
-   * on `Tx`/`transaction()` in `./client`.
+   * on `Tx`/`transaction()` in `./client`. Pass `false` only for a test that
+   * deliberately needs to demonstrate the violation the trap exists to
+   * catch, or otherwise depends on the pre-trap, unguarded connection.
    */
   trapDbInTransaction?: boolean;
 }): {
@@ -89,9 +108,8 @@ export function createTestDb(options?: {
   sqlite.pragma('foreign_keys = ON');
 
   let transactionOpen = false;
-  const dbConnection = options?.trapDbInTransaction
-    ? guardDatabase(sqlite, () => transactionOpen)
-    : sqlite;
+  const trapDbInTransaction = options?.trapDbInTransaction ?? true;
+  const dbConnection = trapDbInTransaction ? guardDatabase(sqlite, () => transactionOpen) : sqlite;
   const db = drizzle(dbConnection, { schema });
 
   const tx: Tx = {
