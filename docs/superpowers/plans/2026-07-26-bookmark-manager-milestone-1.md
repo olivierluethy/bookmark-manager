@@ -5102,10 +5102,98 @@ export function BookmarkCard({ bookmark, selected, onClick, onOpen }: Props) {
 }
 ```
 
-Wire `viewMode === 'cards'` in `BookmarkList` to render a virtualized grid of
-`BookmarkCard` (compute `columns` from the container width, then virtualize rows of
-`columns` items). `viewMode === 'compact'` maps to the compact row height already
-supported.
+Then add the grid branch to `BookmarkList`. The grid virtualizes *rows* of `columns`
+cards, so 20,000 cards still mount only the visible band. `viewMode === 'compact'` needs
+no branch — it maps to the compact row height the list already supports.
+
+```tsx
+// Add to src/features/library/BookmarkList.tsx
+
+import { useEffect, useState } from 'react';
+import { BookmarkCard } from './BookmarkCard';
+
+const CARD_MIN_WIDTH = 200;
+const CARD_HEIGHT = 190;
+const GRID_GAP = 12;
+
+/** Tracks the container width so the column count reflows with the pane. */
+function useColumnCount(ref: React.RefObject<HTMLDivElement | null>): number {
+  const [columns, setColumns] = useState(1);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry?.contentRect.width ?? 0;
+      setColumns(Math.max(1, Math.floor((width + GRID_GAP) / (CARD_MIN_WIDTH + GRID_GAP))));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+  return columns;
+}
+```
+
+Inside `BookmarkList`, call `const columns = useColumnCount(parentRef);` alongside the
+existing hooks, then build a second virtualizer and branch on `viewMode`:
+
+```tsx
+  const viewMode = useUiStore((s) => s.viewMode);
+  const columns = useColumnCount(parentRef);
+  const rowCount = Math.ceil(rows.length / columns);
+
+  const gridVirtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => CARD_HEIGHT + GRID_GAP,
+    overscan: 4,
+  });
+
+  if (viewMode === 'cards') {
+    return (
+      <div ref={parentRef} className="h-full overflow-auto p-3">
+        <div
+          role="listbox"
+          aria-label="Bookmarks"
+          aria-multiselectable="true"
+          style={{ height: gridVirtualizer.getTotalSize(), position: 'relative' }}
+        >
+          {gridVirtualizer.getVirtualItems().map((virtualRow) => {
+            const start = virtualRow.index * columns;
+            return (
+              <div
+                key={virtualRow.key}
+                style={{
+                  position: 'absolute', top: 0, left: 0, width: '100%',
+                  height: CARD_HEIGHT, transform: `translateY(${virtualRow.start}px)`,
+                  display: 'grid', gap: GRID_GAP,
+                  gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                }}
+              >
+                {rows.slice(start, start + columns).map((bookmark) => (
+                  <BookmarkCard
+                    key={bookmark.id}
+                    bookmark={bookmark}
+                    selected={selectedIds.has(bookmark.id)}
+                    onClick={(e) =>
+                      clickBookmark(bookmark.id, orderedIds, {
+                        shift: e.shiftKey,
+                        meta: e.metaKey || e.ctrlKey,
+                      })
+                    }
+                    onOpen={() => open(bookmark.url, bookmark.id)}
+                  />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+```
+
+Place this branch after the loading and empty-state guards so those still apply, and
+before the existing list return.
 
 - [ ] **Step 4: Assemble `src/App.tsx`**
 
@@ -5249,7 +5337,7 @@ Verify by keyboard alone, in both themes:
 It must document setup, export instructions, the data model, where data lives, backup,
 the required headers, and — explicitly — the known limitations:
 
-```markdown
+````markdown
 # Bookmark Manager
 
 A local-first bookmark manager. Your bookmarks are stored in SQLite inside your own
@@ -5326,7 +5414,7 @@ pnpm test          # unit tests
 pnpm lint
 node scripts/generate-fixture.mjs 20000   # 20k-bookmark perf fixture
 ```
-```
+````
 
 - [ ] **Step 5: Final verification**
 
