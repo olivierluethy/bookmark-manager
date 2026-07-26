@@ -1819,24 +1819,38 @@ Expected: PASS, 4 tests.
 - [ ] **Step 8: Write `src/db/boot.ts` and wire it into `main.tsx`**
 
 ```ts
-import { sql } from 'drizzle-orm';
 import type { Db, Tx } from './client';
 import { runMigrations } from './migrate';
 import { seedSystemFolders } from './seed';
 
+/**
+ * Owns the whole database boot sequence. `runMigrations` reads its own
+ * bookkeeping through the Tx seam — do NOT reintroduce a caller-supplied
+ * applied-set, which is what made migrations re-run in the browser while the
+ * Node tests stayed green.
+ *
+ * Serialized with an exclusive Web Lock because SQLocal's own database lock is
+ * requested in 'shared' mode and therefore does not stop two tabs racing the
+ * first migration on a fresh database.
+ */
 export async function bootDatabase(
   db: Db,
   transaction: <R>(fn: (tx: Tx) => Promise<R>) => Promise<R>,
 ): Promise<void> {
-  // The bookkeeping table may not exist on the very first boot.
-  const applied = await db
-    .all<{ id: string; hash: string }>(sql`SELECT id, hash FROM migrations`)
-    .catch(() => [] as { id: string; hash: string }[]);
+  const run = async () => {
+    await transaction((tx) => runMigrations(tx));
+    await transaction((tx) => seedSystemFolders(db, tx));
+  };
 
-  await transaction((tx) => runMigrations(tx, new Map(applied.map((r) => [r.id, r.hash]))));
-  await transaction((tx) => seedSystemFolders(db, tx));
+  if (!navigator.locks) return run();
+  return navigator.locks.request('bookmarks:migrate', { mode: 'exclusive' }, run);
 }
 ```
+
+`main.tsx` keeps the environment check ahead of this: `checkEnvironment()` comes from
+the dependency-free `@/db/environment`, and `@/db/client` is only reached through a
+dynamic `await import()` on the ok-path — importing it eagerly constructs
+`SQLocalDrizzle`, which synchronously spawns the Worker and defeats the guard.
 
 Call `bootDatabase(db, transaction)` once inside `BootGuard` before rendering the app,
 showing a skeleton while it resolves.
