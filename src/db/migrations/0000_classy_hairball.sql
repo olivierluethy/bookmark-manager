@@ -44,6 +44,7 @@ CREATE TABLE `folders` (
 );
 --> statement-breakpoint
 CREATE INDEX `folders_parent_id_idx` ON `folders` (`parent_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `folders_system_key_unq` ON `folders` (`system_key`) WHERE "folders"."system_key" is not null;--> statement-breakpoint
 CREATE TABLE `import_batches` (
 	`id` text PRIMARY KEY NOT NULL,
 	`file_name` text NOT NULL,

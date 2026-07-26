@@ -1,5 +1,15 @@
 packages:
   - '.'
+# allowBuilds must be present (pnpm rewrites this file with unset placeholders
+# and exits non-zero on `pnpm install` otherwise), but neither postinstall
+# script is actually required:
+#   - better-sqlite3@13.0.1 ships prebuilt native binaries under
+#     prebuilds/<platform>.node and loads successfully with its build blocked.
+#   - esbuild's own binary comes from a platform-specific optionalDependency
+#     package (e.g. @esbuild/linux-x64), not from its postinstall script.
+# Verified empirically: `rm -rf node_modules && pnpm install --frozen-lockfile=false`
+# with both set to false succeeds, `pnpm test` (39/39) and `pnpm build` both
+# pass with builds blocked. Do not flip these to true without new evidence.
 allowBuilds:
-  better-sqlite3: true
-  esbuild: true
+  better-sqlite3: false
+  esbuild: false

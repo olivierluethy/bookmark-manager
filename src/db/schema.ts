@@ -1,5 +1,6 @@
-import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
+import { isNotNull } from 'drizzle-orm';
 
 export type SystemKey = 'unsorted' | 'pinned' | 'trash';
 export type SourceBrowser =
@@ -21,7 +22,10 @@ export const folders = sqliteTable(
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
-  (t) => [index('folders_parent_id_idx').on(t.parentId)],
+  (t) => [
+    index('folders_parent_id_idx').on(t.parentId),
+    uniqueIndex('folders_system_key_unq').on(t.systemKey).where(isNotNull(t.systemKey)),
+  ],
 );
 
 export const importBatches = sqliteTable('import_batches', {

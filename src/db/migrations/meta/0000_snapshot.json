@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "df797d6d-82fe-4da0-b636-5b9c082b350b",
+  "id": "710d531a-88d8-4395-a280-a5e2b76a5ab9",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "bookmarks": {
@@ -311,6 +311,14 @@
             "parent_id"
           ],
           "isUnique": false
+        },
+        "folders_system_key_unq": {
+          "name": "folders_system_key_unq",
+          "columns": [
+            "system_key"
+          ],
+          "isUnique": true,
+          "where": "\"folders\".\"system_key\" is not null"
         }
       },
       "foreignKeys": {
