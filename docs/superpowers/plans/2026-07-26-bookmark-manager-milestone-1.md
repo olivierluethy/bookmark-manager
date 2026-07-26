@@ -5265,7 +5265,356 @@ git commit -m "feat: add detail pane, filter bar, card view, and assemble app sh
 
 ---
 
-### Task 17: Performance pass, accessibility pass, and README
+### Task 17: Filter controls
+
+**Files:**
+- Create: `src/features/library/FilterPanel.tsx`, `src/features/library/useFilterOptions.ts`
+- Modify: `src/stores/ui.ts`, `src/features/library/useBookmarks.ts`, `src/features/library/FilterBar.tsx`
+- Test: `src/stores/__tests__/ui.test.ts` (extend)
+
+**Interfaces:**
+- Consumes: `BookmarkFilter` (Task 8), `useUiStore`, `useBookmarks`
+- Produces:
+  ```ts
+  // added to useUiStore
+  filter: BookmarkFilter;
+  setFilter(patch: Partial<BookmarkFilter>): void;
+  clearFilters(): void;
+  activeFilterCount(): number;
+
+  // useFilterOptions.ts — distinct values for the dropdowns
+  function useFilterOptions(): {
+    sites: { value: string; count: number }[];
+    tags: { value: string; count: number }[];
+    browsers: string[];
+    batches: { id: string; fileName: string }[];
+  };
+  ```
+
+Spec §8.3 requires filters for folder, tag, site, source browser, import batch,
+untagged, never-opened, and added-before-date. `BookmarkFilter` already implements and
+tests all of them (Task 8); this task supplies the controls. Folder filtering is already
+handled by the sidebar and is not duplicated here.
+
+- [ ] **Step 1: Write the failing store test**
+
+```ts
+// append to src/stores/__tests__/ui.test.ts
+describe('bookmark filters', () => {
+  beforeEach(() => useUiStore.getState().resetForTest());
+
+  it('starts with no filters active', () => {
+    expect(useUiStore.getState().activeFilterCount()).toBe(0);
+  });
+
+  it('merges patches instead of replacing the whole filter', () => {
+    useUiStore.getState().setFilter({ site: 'react.dev' });
+    useUiStore.getState().setFilter({ untagged: true });
+    expect(useUiStore.getState().filter).toMatchObject({ site: 'react.dev', untagged: true });
+    expect(useUiStore.getState().activeFilterCount()).toBe(2);
+  });
+
+  it('clearing a single filter removes it from the count', () => {
+    useUiStore.getState().setFilter({ site: 'react.dev' });
+    useUiStore.getState().setFilter({ site: undefined });
+    expect(useUiStore.getState().activeFilterCount()).toBe(0);
+  });
+
+  it('does not count a false boolean as an active filter', () => {
+    useUiStore.getState().setFilter({ untagged: false });
+    expect(useUiStore.getState().activeFilterCount()).toBe(0);
+  });
+
+  it('clearFilters resets everything', () => {
+    useUiStore.getState().setFilter({ site: 'a.com', untagged: true, addedBefore: 100 });
+    useUiStore.getState().clearFilters();
+    expect(useUiStore.getState().activeFilterCount()).toBe(0);
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pnpm vitest run src/stores/__tests__/ui.test.ts`
+Expected: FAIL — `setFilter is not a function`.
+
+- [ ] **Step 3: Add filter state to `src/stores/ui.ts`**
+
+```ts
+// Add the import:
+import type { BookmarkFilter } from '@/db/repo/bookmarks';
+
+// Add to UiState:
+//   filter: BookmarkFilter;
+//   setFilter: (patch: Partial<BookmarkFilter>) => void;
+//   clearFilters: () => void;
+//   activeFilterCount: () => number;
+//
+// Add to INITIAL: filter: {} as BookmarkFilter,
+//
+// Add to the store body:
+      setFilter: (patch) =>
+        set((s) => {
+          const next: BookmarkFilter = { ...s.filter, ...patch };
+          // An explicit undefined means "remove this filter", not "store undefined".
+          for (const key of Object.keys(patch) as (keyof BookmarkFilter)[]) {
+            if (patch[key] === undefined) delete next[key];
+          }
+          return { filter: next };
+        }),
+      clearFilters: () => set({ filter: {} }),
+      activeFilterCount: () =>
+        Object.values(get().filter).filter((v) => v !== undefined && v !== false && v !== '')
+          .length,
+```
+
+Note: `activeFilterCount` reads state, so the store factory signature becomes
+`(set, get) => ({ … })`. Filters are transient — exclude `filter` from `partialize`.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `pnpm vitest run src/stores/__tests__/ui.test.ts`
+Expected: PASS, 11 tests.
+
+- [ ] **Step 5: Write `src/features/library/useFilterOptions.ts`**
+
+Distinct values are derived with SQL aggregates rather than by loading every row, so
+this stays cheap at 20k bookmarks.
+
+```ts
+import { useEffect, useState } from 'react';
+import { sql, isNull, and } from 'drizzle-orm';
+import { db } from '@/db/client';
+import { bookmarks } from '@/db/schema';
+import { listImportBatches } from '@/db/repo/importBatches';
+
+type Options = {
+  sites: { value: string; count: number }[];
+  tags: { value: string; count: number }[];
+  browsers: string[];
+  batches: { id: string; fileName: string }[];
+};
+
+const EMPTY: Options = { sites: [], tags: [], browsers: [], batches: [] };
+
+export function useFilterOptions(): Options {
+  const [options, setOptions] = useState<Options>(EMPTY);
+
+  useEffect(() => {
+    void (async () => {
+      const siteRows = await db
+        .select({ value: bookmarks.site, count: sql<number>`count(*)` })
+        .from(bookmarks)
+        .where(and(isNull(bookmarks.deletedAt), sql`${bookmarks.site} <> ''`))
+        .groupBy(bookmarks.site)
+        .orderBy(sql`count(*) desc`)
+        .limit(200);
+
+      const browserRows = await db
+        .select({ value: bookmarks.sourceBrowser })
+        .from(bookmarks)
+        .where(isNull(bookmarks.deletedAt))
+        .groupBy(bookmarks.sourceBrowser);
+
+      // Tags are a JSON array in a text column, so they are counted in JS.
+      // Only the tags column is read, not whole rows.
+      const tagRows = await db
+        .select({ tags: bookmarks.tags })
+        .from(bookmarks)
+        .where(and(isNull(bookmarks.deletedAt), sql`${bookmarks.tags} <> '[]'`));
+
+      const tagCounts = new Map<string, number>();
+      for (const row of tagRows) {
+        try {
+          for (const tag of JSON.parse(row.tags) as string[]) {
+            tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+          }
+        } catch {
+          // A corrupt tags value must not break the filter list.
+        }
+      }
+
+      setOptions({
+        sites: siteRows,
+        tags: [...tagCounts.entries()]
+          .map(([value, count]) => ({ value, count }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 200),
+        browsers: browserRows.map((r) => r.value).filter((v): v is string => Boolean(v)),
+        batches: (await listImportBatches(db)).map((b) => ({ id: b.id, fileName: b.fileName })),
+      });
+    })();
+  }, []);
+
+  return options;
+}
+```
+
+- [ ] **Step 6: Write `src/features/library/FilterPanel.tsx`**
+
+```tsx
+import { useUiStore } from '@/stores/ui';
+import { useFilterOptions } from './useFilterOptions';
+
+function Select({
+  label, value, onChange, children,
+}: {
+  label: string; value: string; onChange: (v: string | undefined) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex items-center gap-1.5 text-xs text-muted">
+      {label}
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value === '' ? undefined : e.target.value)}
+        className="max-w-40 rounded-[4px] border border-line bg-bg px-1.5 py-1 text-text"
+      >
+        <option value="">Any</option>
+        {children}
+      </select>
+    </label>
+  );
+}
+
+export function FilterPanel() {
+  const { filter, setFilter, clearFilters, activeFilterCount } = useUiStore();
+  const { sites, tags, browsers, batches } = useFilterOptions();
+  const active = activeFilterCount();
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-2">
+      <Select label="Site" value={filter.site ?? ''} onChange={(v) => setFilter({ site: v })}>
+        {sites.map((s) => (
+          <option key={s.value} value={s.value}>{s.value} ({s.count})</option>
+        ))}
+      </Select>
+
+      <Select label="Tag" value={filter.tag ?? ''} onChange={(v) => setFilter({ tag: v })}>
+        {tags.map((t) => (
+          <option key={t.value} value={t.value}>{t.value} ({t.count})</option>
+        ))}
+      </Select>
+
+      <Select
+        label="From"
+        value={filter.sourceBrowser ?? ''}
+        onChange={(v) => setFilter({ sourceBrowser: v as BookmarkFilter['sourceBrowser'] })}
+      >
+        {browsers.map((b) => <option key={b} value={b}>{b}</option>)}
+      </Select>
+
+      <Select
+        label="Import"
+        value={filter.importBatchId ?? ''}
+        onChange={(v) => setFilter({ importBatchId: v })}
+      >
+        {batches.map((b) => <option key={b.id} value={b.id}>{b.fileName}</option>)}
+      </Select>
+
+      <label className="flex items-center gap-1.5 text-xs text-muted">
+        Added before
+        <input
+          type="date"
+          value={
+            filter.addedBefore
+              ? new Date(filter.addedBefore * 1000).toISOString().slice(0, 10)
+              : ''
+          }
+          onChange={(e) =>
+            setFilter({
+              addedBefore: e.target.value
+                ? Math.floor(new Date(e.target.value).getTime() / 1000)
+                : undefined,
+            })
+          }
+          className="rounded-[4px] border border-line bg-bg px-1.5 py-1 text-text"
+        />
+      </label>
+
+      <label className="flex items-center gap-1.5 text-xs text-muted">
+        <input
+          type="checkbox"
+          checked={filter.untagged ?? false}
+          onChange={(e) => setFilter({ untagged: e.target.checked || undefined })}
+        />
+        Untagged
+      </label>
+
+      <label className="flex items-center gap-1.5 text-xs text-muted">
+        <input
+          type="checkbox"
+          checked={filter.neverOpened ?? false}
+          onChange={(e) => setFilter({ neverOpened: e.target.checked || undefined })}
+        />
+        Never opened
+      </label>
+
+      {active > 0 && (
+        <button
+          onClick={clearFilters}
+          className="ml-auto rounded-[4px] border border-line px-2 py-1 text-xs transition-colors duration-150 hover:border-accent"
+        >
+          Clear {active} {active === 1 ? 'filter' : 'filters'}
+        </button>
+      )}
+    </div>
+  );
+}
+```
+
+Add `import type { BookmarkFilter } from '@/db/repo/bookmarks';` at the top of the file
+for the `sourceBrowser` cast.
+
+- [ ] **Step 7: Make `useBookmarks` read the store filter**
+
+Replace the `extraFilter` parameter with the store's filter so every consumer stays in
+sync, and remove the now-unused `NO_EXTRA_FILTER` constant.
+
+```ts
+// src/features/library/useBookmarks.ts — replace the filter assembly
+  const storeFilter = useUiStore((s) => s.filter);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    const filter: BookmarkFilter = {
+      ...storeFilter,
+      ...(activeFolderId ? { folderId: activeFolderId } : {}),
+    };
+    setRows(await listBookmarks(db, filter, { key: sortKey, dir: sortDir }));
+    setLoading(false);
+  }, [activeFolderId, sortKey, sortDir, storeFilter]);
+```
+
+`storeFilter` is a stable reference between `setFilter` calls, so this does not loop.
+
+- [ ] **Step 8: Render `FilterPanel` in `App.tsx`**
+
+Place it directly under `FilterBar` inside the `main` column:
+
+```tsx
+        <div className="flex h-full flex-col">
+          <FilterBar count={rows.length} />
+          <FilterPanel />
+          <div className="min-h-0 flex-1"><BookmarkList /></div>
+        </div>
+```
+
+- [ ] **Step 9: Verify and commit**
+
+Run `pnpm dev` with an import loaded. Verify each of the seven controls narrows the list,
+that they combine (site + untagged together), that "Clear filters" resets them, and that
+the count in `FilterBar` updates. Then:
+
+```bash
+pnpm test && pnpm build
+git add -A
+git commit -m "feat: add filter controls for site, tag, browser, batch, and date"
+```
+
+---
+
+### Task 18: Performance pass, accessibility pass, and README
 
 **Files:**
 - Create: `scripts/generate-fixture.mjs`, `README.md`
@@ -5457,14 +5806,11 @@ git commit -m "docs: add README and performance fixture generator"
 | §8.2 folder tree | Task 14 |
 | §8.3 virtualized list, selection, sort, views | Tasks 15, 16 |
 | §8.4 detail pane tier 1, open behavior | Tasks 15, 16 |
+| §8.3 filter controls | Tasks 8 (query layer), 17 (UI) |
 | §8.5 visual direction, themes, density | Tasks 1, 2, 16 |
-| §9 testing strategy | Tasks 4–12, 15 |
-| §10 definition of done | Task 17 |
+| §9 testing strategy | Tasks 4–12, 15, 17 |
+| §10 definition of done | Task 18 |
 
-**Known gap, deliberately deferred:** §8.3 lists filters for tag, source browser, import
-batch, untagged, never-opened, and added-before-date. `BookmarkFilter` implements all of
-them in Task 8 and they are unit-tested, but Task 16's `FilterBar` exposes only sort,
-view mode, and density in its UI. Folder filtering works via the sidebar. Surfacing the
-remaining filter controls is a small follow-up within Milestone 1 — add it to Task 16 if
-you want them in this milestone rather than the next.
+Every spec section maps to at least one task. The filter controls of §8.3 were originally
+folded into Task 16 as query-layer-only; they are now Task 17 so the UI matches the spec.
 
