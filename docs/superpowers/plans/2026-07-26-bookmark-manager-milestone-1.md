@@ -1271,6 +1271,12 @@ export type Db = SqliteRemoteDatabase<typeof schema>;
 export const sqlocal = new SQLocalDrizzle({
   databasePath: 'bookmarks.sqlite3',
   verbose: false,
+  // SQLite defaults foreign_keys OFF, and the setting is per-connection, not
+  // stored in the file. Without this the folder cascade and the bookmarks
+  // ON DELETE SET NULL never fire in the browser — while the better-sqlite3
+  // test harness, which sets the pragma itself, keeps passing. That divergence
+  // is exactly how "tests green, production corrupts" happens.
+  onInit: (sql) => [sql`PRAGMA foreign_keys = ON`],
 });
 
 export const db: Db = drizzle(sqlocal.driver, sqlocal.batchDriver, { schema });
@@ -1545,7 +1551,18 @@ console.log('migrations ok', await db.all(sql`SELECT name FROM sqlite_master WHE
 
 Run `pnpm dev`. Expected: the console lists `folders`, `bookmarks`, `import_batches`,
 `settings`, `migrations`. **Hard-refresh and confirm no migration re-runs** — that proves
-OPFS actually persisted. Then remove the temporary logging.
+OPFS actually persisted.
+
+**Also confirm the foreign-key pragma actually took effect on this connection**, since
+the whole folder-cascade contract depends on it and it is per-connection:
+
+```ts
+console.log('foreign_keys =', await db.all(sql`PRAGMA foreign_keys`));
+```
+
+Expected: `[{ foreign_keys: 1 }]`. If it reports `0`, the `onInit` hook did not run and
+folder deletion will silently orphan rows in the browser while every Node test keeps
+passing. Fix that before continuing. Then remove the temporary logging.
 
 **If `crossOriginIsolated` is false**, BootGuard renders instead. Fix `vite.config.ts`
 before continuing; nothing downstream works without this.
