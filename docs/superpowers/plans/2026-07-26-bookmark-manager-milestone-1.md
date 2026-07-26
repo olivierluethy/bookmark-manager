@@ -34,7 +34,12 @@ Every task's requirements implicitly include this section.
   | `--color-text` | `#1F1B14` | `#EFE9DC` |
   | `--color-muted` | `#6B6355` | `#9A9081` |
   | `--color-line` | `#E5DED1` | `#332E24` |
-  | `--color-accent` | `#B4552E` | `#B4552E` |
+  | `--color-accent` | `#B4552E` | `#CC7048` |
+  | `--color-on-accent` | `#FFFFFF` | `#17150F` |
+- **Accent differs per theme deliberately.** `#B4552E` measures 3.43:1 on the dark
+  surface and fails WCAG AA for small text; `#CC7048` measures 4.79:1. White on
+  `#CC7048` measures 3.51:1 and also fails, so `--color-on-accent` flips to near-black
+  in dark mode. Any filled-accent element uses `text-on-accent`, never `text-white`.
 - **8px spacing grid, 6px radii, motion 120–200ms**, respecting `prefers-reduced-motion`.
 
 ---
@@ -179,8 +184,12 @@ export default defineConfig({
   --color-muted: #6B6355;
   --color-line: #E5DED1;
   --color-accent: #B4552E;
+  --color-on-accent: #FFFFFF;
   --radius-app: 6px;
-  --font-display: 'Fraunces', ui-serif, Georgia, serif;
+  /* Font family names must match the @font-face names shipped by the
+     @fontsource packages installed in Task 2 — the variable Fraunces build
+     registers as 'Fraunces Variable', not 'Fraunces'. */
+  --font-display: 'Fraunces Variable', ui-serif, Georgia, serif;
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
 }
 
@@ -191,7 +200,10 @@ export default defineConfig({
     --color-text: #EFE9DC;
     --color-muted: #9A9081;
     --color-line: #332E24;
-    --color-accent: #B4552E;
+    /* Lighter than light mode's accent: #B4552E measures 3.43:1 on this
+       surface and fails AA for small text. */
+    --color-accent: #CC7048;
+    --color-on-accent: #17150F;
   }
 }
 
@@ -491,7 +503,7 @@ export function ThemeToggle() {
           aria-checked={mode === option}
           onClick={() => setMode(option)}
           className={`rounded-[4px] px-2 py-1 text-xs capitalize transition-colors duration-150 ${
-            mode === option ? 'bg-accent text-white' : 'text-muted hover:text-text'
+            mode === option ? 'bg-accent text-on-accent' : 'text-muted hover:text-text'
           }`}
         >
           {option}
@@ -4186,7 +4198,7 @@ export function ImportPreview({ plan, options, onOptions, onApply, onCancel }: P
         <button
           onClick={onApply}
           disabled={counts.newBookmarks === 0}
-          className="rounded-[6px] bg-accent px-4 py-2 text-sm text-white transition-opacity duration-150 disabled:opacity-40"
+          className="rounded-[6px] bg-accent px-4 py-2 text-sm text-on-accent transition-opacity duration-150 disabled:opacity-40"
         >
           Import {counts.newBookmarks.toLocaleString()} bookmarks
         </button>
@@ -4260,7 +4272,7 @@ export function ImportModal({ onDone }: { onDone: () => void }) {
           <p className="font-display text-2xl">
             Imported {stage.inserted.toLocaleString()} bookmarks
           </p>
-          <button onClick={onDone} className="rounded-[6px] bg-accent px-4 py-2 text-sm text-white">
+          <button onClick={onDone} className="rounded-[6px] bg-accent px-4 py-2 text-sm text-on-accent">
             View your library
           </button>
         </div>
@@ -5076,7 +5088,7 @@ export function FilterBar({ count }: { count: number }) {
             aria-checked={viewMode === v}
             onClick={() => setViewMode(v)}
             className={`rounded-[4px] px-2 py-1 text-xs capitalize ${
-              viewMode === v ? 'bg-accent text-white' : 'text-muted hover:text-text'
+              viewMode === v ? 'bg-accent text-on-accent' : 'text-muted hover:text-text'
             }`}
           >
             {v}
@@ -5251,7 +5263,7 @@ function Library({ onImport }: { onImport: () => void }) {
       sidebar={
         <div>
           <div className="flex items-center justify-between gap-2 border-b border-line p-3">
-            <button onClick={onImport} className="rounded-[6px] bg-accent px-3 py-1.5 text-sm text-white">
+            <button onClick={onImport} className="rounded-[6px] bg-accent px-3 py-1.5 text-sm text-on-accent">
               Import
             </button>
             <ThemeToggle />

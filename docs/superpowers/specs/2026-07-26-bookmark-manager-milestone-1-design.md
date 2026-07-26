@@ -480,14 +480,19 @@ dashboard.
 | `--color-text` | `#1F1B14` | `#EFE9DC` |
 | `--color-muted` | `#6B6355` | `#9A9081` |
 | `--color-line` | `#E5DED1` | `#332E24` |
-| `--color-accent` | `#B4552E` | `#B4552E` |
+| `--color-accent` | `#B4552E` | `#CC7048` |
+| `--color-on-accent` | `#FFFFFF` | `#17150F` |
 
 - Type: a serif display face for headings, Inter for UI, tabular numerals for counts.
   **Self-hosted via `@fontsource`** — a Google Fonts CDN link would break the offline
   guarantee.
 - 8px spacing grid, 6px radii.
 - Motion 120–200 ms, purposeful, respecting `prefers-reduced-motion`.
-- Both themes hand-tuned to WCAG AA minimum. Neither is an afterthought.
+- Both themes hand-tuned to WCAG AA minimum, verified by computed contrast ratio rather
+  than by eye. The dark accent is lightened to `#CC7048` because `#B4552E` measures only
+  3.43:1 on the dark surface and fails AA for small text; `--color-on-accent` flips to
+  near-black in dark mode because white on `#CC7048` measures 3.51:1 and also fails.
+  Neither theme is an afterthought.
 - Density toggle (comfortable / compact), persisted.
 - Visible focus rings throughout.
 - Every async surface gets a real skeleton state; every list gets a designed empty state
