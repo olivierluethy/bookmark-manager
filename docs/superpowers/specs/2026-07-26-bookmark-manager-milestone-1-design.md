@@ -325,12 +325,40 @@ duplicate detection is an index lookup.
 between `url` and `normalizedUrl` as a visible diff, so normalization is inspectable
 rather than magic.
 
+### 6.1 Decisions that govern what merges
+
+`normalizedUrl` is hashed into an indexed column at import time and is the sole basis for
+duplicate detection. A wrong result never crashes — it silently merges two distinct
+bookmarks, or silently fails to merge two identical ones, and correcting it after
+thousands of rows carry the wrong hash is expensive. The following are therefore
+deliberate, and each is locked in by a test:
+
+- **Schemes with no authority pass through untouched.** `mailto:`, `javascript:`, and
+  `data:` URLs have no `//host` component. Rebuilding them from parts produces garbage
+  (`mailto://foo@example.com`), so they are returned verbatim. A URL counts as having an
+  authority when its host is non-empty **or** its path starts with `/` — the second
+  clause keeps `file:///home/x` on the normal path.
+- **Userinfo is preserved.** Dropping credentials would make
+  `https://user:pass@example.com/a` and `https://example.com/a` hash identically and
+  merge, which is the more damaging error.
+- **`siteOf` enables `allowPrivateDomains`.** Without it every GitHub Pages user
+  collapses into the single site `github.io`. This applies to the whole private section
+  of the public suffix list, so `*.herokuapp.com`, `*.blogspot.com`, and S3 bucket hosts
+  are each their own site too — which is the desired grouping for this product.
+- **Percent-encoded unreserved characters are NOT canonicalized.** `/%7Euser` and
+  `/~user` remain distinct and will not merge. Accepted limitation, documented rather
+  than silently present.
+- **Ports follow WHATWG URL semantics**, so a default port for the scheme is dropped and
+  a non-default one is kept. `http://example.com:443/a` correctly becomes
+  `https://example.com/a`.
+- **IDN hosts unify automatically**: `münchen.de` and `xn--mnchen-3ya.de` both normalize
+  to the punycode form via URL host parsing, with no custom code.
+
 `urlHash(normalized)` uses WebCrypto `crypto.subtle.digest('SHA-256')`. It is async, and
 is computed in batch during import rather than per-row.
 
-`siteOf(url)` uses `tldts` to extract eTLD+1 correctly, so `w3schools.com/html/x.asp` and
-`w3schools.com/js/y.asp` share a `site` while `github.io` subdomains do not incorrectly
-collapse.
+`siteOf(url)` uses `tldts` to extract eTLD+1, so `w3schools.com/html/x.asp` and
+`w3schools.com/js/y.asp` share a `site` while `github.io` subdomains do not collapse.
 
 ---
 
