@@ -325,7 +325,7 @@ git commit -m "feat: scaffold vite + react + tailwind v4 with cross-origin isola
 **Files:**
 - Create: `src/lib/theme.ts`, `src/lib/__tests__/theme.test.ts`
 - Create: `src/components/ThemeToggle.tsx`
-- Modify: `src/main.tsx`
+- Modify: `src/main.tsx`, `src/styles.css`
 
 **Interfaces:**
 - Consumes: `src/styles.css` theme tokens from Task 1
@@ -338,6 +338,37 @@ git commit -m "feat: scaffold vite + react + tailwind v4 with cross-origin isola
   function readStoredMode(raw: string | null): ThemeMode;   // defaults to 'system'
   const THEME_STORAGE_KEY = 'bookmarks.theme';
   ```
+
+- [ ] **Step 0: Self-host the fonts**
+
+Task 1's `styles.css` declares `Fraunces` and `Inter` but no font files exist, so both
+currently fall back to system faces. A Google Fonts link would break the offline
+guarantee, so the fonts are installed as packages and bundled by Vite.
+
+```bash
+pnpm add @fontsource-variable/fraunces@5.3.0 @fontsource/inter@5.3.0
+```
+
+Add these imports at the very top of `src/styles.css`, above `@import 'tailwindcss'`:
+
+```css
+/* Self-hosted — bundled by Vite, no network request at runtime. */
+@import '@fontsource-variable/fraunces/index.css';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+```
+
+Verify with `pnpm build` that `.woff2` files land in `dist/assets/`, and confirm no
+`fonts.googleapis.com` or other external host appears anywhere in `dist/`:
+
+```bash
+pnpm build
+ls dist/assets/*.woff2 | head -3
+grep -rl "fonts.googleapis\|fonts.gstatic\|https://" dist/ || echo "no external hosts in dist"
+```
+
+Expected: `.woff2` files are listed, and the grep reports no external hosts.
 
 - [ ] **Step 1: Write the failing test**
 
