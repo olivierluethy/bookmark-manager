@@ -6,25 +6,37 @@ import { hashSql, loadMigrations, runMigrations, splitStatements } from '@/db/mi
 describe('runMigrations', () => {
   it('applies every migration on a fresh database', async () => {
     const { tx, close } = createTestDb();
-    const ran = await runMigrations(tx, new Map());
+    const ran = await runMigrations(tx);
     expect(ran.length).toBeGreaterThan(0);
     close();
   });
 
-  it('is idempotent — a second run applies nothing', async () => {
-    const { db, tx, close } = createTestDb();
-    await runMigrations(tx, new Map());
+  it(
+    'does not re-run migrations on a second boot against the same database ' +
+      '(regression: production read applied-migration rows via a raw sql template, ' +
+      'which yields arrays instead of objects under the SQLocal driver, so every ' +
+      'migration looked unapplied and the DDL re-ran on every reload)',
+    async () => {
+      const { tx, close } = createTestDb();
+      await runMigrations(tx);
 
-    const rows = db.all<{ id: string; hash: string }>(sql`SELECT id, hash FROM migrations`);
-    const applied = new Map(rows.map((r) => [r.id, r.hash]));
+      await expect(runMigrations(tx)).resolves.toEqual([]);
+      close();
+    },
+  );
 
-    expect(await runMigrations(tx, applied)).toEqual([]);
+  it('stays a no-op on a third boot as well', async () => {
+    const { tx, close } = createTestDb();
+    await runMigrations(tx);
+    await runMigrations(tx);
+
+    await expect(runMigrations(tx)).resolves.toEqual([]);
     close();
   });
 
   it('creates the bookmarks table with a working url_hash index', async () => {
     const { db, tx, close } = createTestDb();
-    await runMigrations(tx, new Map());
+    await runMigrations(tx);
     const idx = db.all<{ name: string }>(
       sql`SELECT name FROM sqlite_master WHERE type='index' AND name='bookmarks_url_hash_idx'`,
     );
@@ -36,8 +48,11 @@ describe('runMigrations', () => {
     const { tx, close } = createTestDb();
     const first = loadMigrations()[0];
     expect(first).toBeDefined();
-    const stale = new Map([[first!.id, 'deadbeef']]);
-    await expect(runMigrations(tx, stale)).rejects.toThrow(/modified after it was applied/);
+
+    await runMigrations(tx);
+    await tx.exec('UPDATE migrations SET hash = ? WHERE id = ?', ['deadbeef', first!.id]);
+
+    await expect(runMigrations(tx)).rejects.toThrow(/modified after it was applied/);
     close();
   });
 });

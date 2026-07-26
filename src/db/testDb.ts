@@ -18,6 +18,9 @@ export function createTestDb(): {
     exec: async (sql, params) => {
       sqlite.prepare(sql).run(...(params as never[]));
     },
+    all: async <T extends Record<string, unknown>>(sql: string, params: unknown[]) => {
+      return sqlite.prepare(sql).all(...(params as never[])) as T[];
+    },
   };
   return { db, tx, close: () => sqlite.close() };
 }

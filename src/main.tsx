@@ -17,12 +17,17 @@ if (!rootElement) {
 //   1. the console lists folders, bookmarks, import_batches, settings, migrations
 //   2. a hard refresh does not re-run migrations (proves OPFS persisted)
 //   3. `foreign_keys` reports 1, not 0 (proves the per-connection pragma took effect)
-const rows = await db
-  .all<{ id: string; hash: string }>(sql`SELECT id, hash FROM migrations`)
-  .catch(() => []);
-await transaction((tx) => runMigrations(tx, new Map(rows.map((r) => [r.id, r.hash]))));
-console.log('migrations ok', await db.all(sql`SELECT name FROM sqlite_master WHERE type='table'`));
-console.log('foreign_keys =', await db.all(sql`PRAGMA foreign_keys`));
+await transaction((tx) => runMigrations(tx));
+// These are best-effort diagnostics only — an odd query shape here must
+// never crash boot, since real migration/boot failures already surface above.
+await db
+  .all(sql`SELECT name FROM sqlite_master WHERE type='table'`)
+  .then((tables) => console.log('migrations ok', tables))
+  .catch((err) => console.log('post-boot table check failed', err));
+await db
+  .all(sql`PRAGMA foreign_keys`)
+  .then((pragma) => console.log('foreign_keys =', pragma))
+  .catch((err) => console.log('post-boot pragma check failed', err));
 
 createRoot(rootElement).render(
   <StrictMode>

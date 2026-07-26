@@ -39,12 +39,22 @@ export function splitStatements(sql: string): string[] {
 }
 
 /**
- * Applies every unapplied migration in filename order. `applied` maps id -> hash
- * for already-applied migrations; a hash mismatch is a hard error, never a
- * silent skip.
+ * Applies every unapplied migration in filename order.
+ *
+ * The set of already-applied migrations is read from the `migrations`
+ * bookkeeping table by this function itself, inside the same `tx` the caller
+ * is about to write through — never supplied by the caller. Production
+ * (SQLocal) and tests (better-sqlite3) both go through `Tx.all`, so there is
+ * one code path for "what counts as applied," not a production path and a
+ * separately-shaped test path. A hash mismatch on an already-applied
+ * migration is a hard error, never a silent skip.
  */
-export async function runMigrations(tx: Tx, applied: Map<string, string>): Promise<string[]> {
+export async function runMigrations(tx: Tx): Promise<string[]> {
   await tx.exec(BOOKKEEPING_SQL, []);
+
+  const rows = await tx.all<{ id: string; hash: string }>('SELECT id, hash FROM migrations', []);
+  const applied = new Map(rows.map((r) => [r.id, r.hash]));
+
   const ran: string[] = [];
 
   for (const { id, sql } of loadMigrations()) {

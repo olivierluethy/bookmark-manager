@@ -25,7 +25,7 @@ const sql = readdirSync(DIR)
  */
 async function createDb() {
   const { db, tx, close } = createTestDb();
-  await runMigrations(tx, new Map());
+  await runMigrations(tx);
   return { db, close };
 }
 

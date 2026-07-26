@@ -4,12 +4,24 @@ import type { SqliteRemoteDatabase } from 'drizzle-orm/sqlite-proxy';
 import * as schema from './schema';
 
 /**
- * Narrow write seam. SQLocal's TransactionHandle is NOT a Drizzle database —
- * it exposes only query/sql/batch — so statements are built with Drizzle for
- * type safety and executed here as raw SQL. This interface is also what lets
- * repositories be tested against better-sqlite3 in Node.
+ * Narrow write/read seam. SQLocal's TransactionHandle is NOT a Drizzle
+ * database — it exposes only query/sql/batch — so statements are built with
+ * Drizzle for type safety and executed here as raw SQL. This interface is
+ * also what lets repositories (and the migration runner) be tested against
+ * better-sqlite3 in Node, exercising the exact same code path production
+ * uses.
+ *
+ * `all` must return row objects (keyed by column name), not row arrays.
+ * SQLocal's `TransactionHandle.sql()` (see `Transaction['sql']` in sqlocal's
+ * dist/client.d.ts) already normalizes to objects via its
+ * convert-rows-to-objects helper, and better-sqlite3's `.all()` returns
+ * objects natively — so both implementations below satisfy this without
+ * extra conversion.
  */
-export type Tx = { exec(sql: string, params: unknown[]): Promise<void> };
+export type Tx = {
+  exec(sql: string, params: unknown[]): Promise<void>;
+  all<T extends Record<string, unknown>>(sql: string, params: unknown[]): Promise<T[]>;
+};
 
 export type Db = SqliteRemoteDatabase<typeof schema>;
 
@@ -31,6 +43,9 @@ export function transaction<R>(fn: (tx: Tx) => Promise<R>): Promise<R> {
     const tx: Tx = {
       exec: async (sql, params) => {
         await handle.sql(sql, ...params);
+      },
+      all: async <T extends Record<string, unknown>>(sql: string, params: unknown[]) => {
+        return await handle.sql<T>(sql, ...params);
       },
     };
     return fn(tx);
