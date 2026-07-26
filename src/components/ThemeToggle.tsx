@@ -3,6 +3,8 @@ import {
   applyTheme,
   readStoredMode,
   resolveTheme,
+  safeGetItem,
+  safeSetItem,
   THEME_STORAGE_KEY,
   type ThemeMode,
 } from '@/lib/theme';
@@ -10,15 +12,13 @@ import {
 const OPTIONS: readonly ThemeMode[] = ['light', 'system', 'dark'];
 
 export function ThemeToggle() {
-  const [mode, setMode] = useState<ThemeMode>(() =>
-    readStoredMode(localStorage.getItem(THEME_STORAGE_KEY)),
-  );
+  const [mode, setMode] = useState<ThemeMode>(() => readStoredMode(safeGetItem(THEME_STORAGE_KEY)));
 
   useEffect(() => {
     const mq = matchMedia('(prefers-color-scheme: dark)');
     const sync = () => applyTheme(resolveTheme(mode, mq.matches), document.documentElement);
     sync();
-    localStorage.setItem(THEME_STORAGE_KEY, mode);
+    safeSetItem(THEME_STORAGE_KEY, mode);
     // Only 'system' needs to react to OS changes, but subscribing always is simpler
     // and harmless.
     mq.addEventListener('change', sync);
