@@ -1,6 +1,12 @@
 import { lazy, Suspense, useState } from 'react';
 import { AppShell } from '@/app/AppShell';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { FolderTree } from '@/features/folders/FolderTree';
+import { BookmarkList } from '@/features/library/BookmarkList';
+import { DetailPane } from '@/features/library/DetailPane';
+import { FilterBar } from '@/features/library/FilterBar';
+import { FilterPanel } from '@/features/library/FilterPanel';
+import { useBookmarks } from '@/features/library/useBookmarks';
 import { useUiStore } from '@/stores/ui';
 
 // Lazy, deliberately: `ImportModal` (via `useImport`) reaches `@/db/client`,
@@ -52,31 +58,35 @@ function Toolbar({ onImport }: { onImport: () => void }) {
   );
 }
 
+function Library({ onImport }: { onImport: () => void }) {
+  const { rows } = useBookmarks();
+  const selectedIds = useUiStore((s) => s.selectedIds);
+  const selected = rows.find((r) => selectedIds.has(r.id)) ?? null;
+
+  return (
+    <AppShell
+      sidebar={<FolderTree />}
+      main={
+        <div className="flex h-full flex-col">
+          <Toolbar onImport={onImport} />
+          <FilterBar count={rows.length} />
+          <FilterPanel />
+          <div className="min-h-0 flex-1">
+            <BookmarkList />
+          </div>
+        </div>
+      }
+      detail={<DetailPane bookmark={selected} />}
+    />
+  );
+}
+
 export function App() {
   const [importOpen, setImportOpen] = useState(false);
 
   return (
     <>
-      <AppShell
-        sidebar={
-          <nav className="p-4 text-sm text-muted" aria-label="Bookmark folders">
-            Sidebar placeholder
-          </nav>
-        }
-        main={
-          <div className="flex h-full flex-col">
-            <Toolbar onImport={() => setImportOpen(true)} />
-            <div className="flex-1 overflow-y-auto p-4 text-sm text-muted">
-              Bookmark list placeholder
-            </div>
-          </div>
-        }
-        detail={
-          <div className="p-4 text-sm text-muted" aria-label="Bookmark detail">
-            Detail placeholder
-          </div>
-        }
-      />
+      <Library onImport={() => setImportOpen(true)} />
 
       {importOpen && (
         <Suspense fallback={null}>
